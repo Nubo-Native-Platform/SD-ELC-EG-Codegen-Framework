@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Build-only aggregator: lets `mvn verify` / `mvn install` at the repo root build every
+  module in dependency order (errorhandler is built before resterrorhandler, so no
+  pre-published errorhandler is needed). Each module keeps its own abstract-nnp parent
+  and version; this POM itself is never deployed.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.nubons.nnp.lcnc.codegen</groupId>
+    <artifactId>codegen-framework-aggregator</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>SD-ELC-EG Codegen Framework (aggregator)</name>
+
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+    </properties>
+
+    <modules>
+        <module>entitygenerator</module>
+        <module>errorhandler</module>
+        <module>resterrorhandler</module>
+        <module>mapperfactory</module>
+    </modules>
+</project>

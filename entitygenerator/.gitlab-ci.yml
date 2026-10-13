@@ -1,0 +1,17 @@
+
+  
+stages: 
+  - build
+  - security-tests
+  - test
+
+maven-build:
+  stage: build
+  before_script:
+    - cd entitygenerator
+
+ 
+include:
+  - project: "devops-templates/build-templates"
+    ref: "main"
+    file: "maven-jdk-deploy-template.yml"

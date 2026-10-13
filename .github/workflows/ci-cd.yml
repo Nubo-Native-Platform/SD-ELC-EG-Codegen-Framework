@@ -1,0 +1,147 @@
+name: Build & Publish CI/CD
+
+# Builds the 4 codegen libraries and publishes each one as its own Maven package:
+#   entitygenerator, errorhandler, resterrorhandler, mapperfactory
+#
+# Published to:
+#   1. GitHub Packages  (this repo's "Packages" tab)
+#   2. Public Maven repo on GitHub Pages, no token needed to download:
+#      https://nubo-native-platform.github.io/SD-ELC-EG-Codegen-Framework/maven/
+#
+# The abstract-nnp parent POM is resolved from its public Pages repo (declared in
+# each module's pom.xml), so no token is needed to build.
+#
+# Releasing: bump a module's <version> in its pom.xml and push to main (or push a
+# v*.*.* tag). Versions already published are skipped; -SNAPSHOT versions are
+# always re-published.
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MODULES: entitygenerator errorhandler resterrorhandler mapperfactory
+  MVN: mvn --batch-mode --no-transfer-progress
+
+jobs:
+  build:
+    name: Validate, Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Validate Maven POMs
+        run: $MVN validate
+
+      # Root pom.xml builds the modules in dependency order
+      # (errorhandler is built before resterrorhandler).
+      - name: Build and Test
+        run: $MVN clean verify
+
+  publish:
+    name: Publish Packages
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push to gh-pages
+      packages: write   # publish to GitHub Packages
+    concurrency:
+      group: publish-packages
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Also writes ~/.m2/settings.xml with <server id="github"> for deploying.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Build all modules
+        run: $MVN clean install -DskipTests
+
+      - name: Prepare gh-pages worktree
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages:gh-pages
+            git worktree add ../site gh-pages
+          else
+            git worktree add --detach ../site
+            cd ../site
+            git checkout --orphan gh-pages
+            git rm -rf . >/dev/null
+          fi
+          mkdir -p ../site/maven
+          touch ../site/.nojekyll
+
+      - name: Publish each module
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGES_URL: https://maven.pkg.github.com/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SITE="$(realpath ..)/site"
+
+          for m in $MODULES; do
+            gav=$($MVN -q -f "$m/pom.xml" help:evaluate \
+              -Dexpression='${project.groupId}:${project.artifactId}:${project.version}' -DforceStdout)
+            IFS=: read -r g a v <<< "$gav"
+            path="${g//.//}/$a/$v"
+            echo "::group::$m ($gav)"
+
+            # 1) Public Maven repo on GitHub Pages
+            if [[ "$v" == *-SNAPSHOT || ! -f "$SITE/maven/$path/$a-$v.pom" ]]; then
+              $MVN -f "$m/pom.xml" deploy -DskipTests \
+                -DaltDeploymentRepository="pages::file://$SITE/maven"
+            else
+              echo "GitHub Pages: $gav already published - skipping"
+            fi
+
+            # 2) GitHub Packages
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -u "$GITHUB_ACTOR:$GITHUB_TOKEN" "$PACKAGES_URL/$path/$a-$v.pom")
+            if [[ "$v" == *-SNAPSHOT || "$code" != "200" ]]; then
+              $MVN -f "$m/pom.xml" deploy -DskipTests \
+                -DaltDeploymentRepository="github::$PACKAGES_URL"
+            else
+              echo "GitHub Packages: $gav already published - skipping"
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Push gh-pages
+        run: |
+          cd ../site
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing new to publish"
+            exit 0
+          fi
+          git commit -m "Publish packages (${GITHUB_REF_NAME} ${GITHUB_SHA::7})"
+          git push origin gh-pages

@@ -109,8 +109,12 @@ jobs:
           SITE="$(realpath ..)/site"
 
           for m in $MODULES; do
-            gav=$($MVN -q -f "$m/pom.xml" help:evaluate \
-              -Dexpression='${project.groupId}:${project.artifactId}:${project.version}' -DforceStdout)
+            # Read groupId:artifactId:version straight from the module's pom.xml
+            gav=$(python3 .github/scripts/pom-gav.py "$m/pom.xml")
+            if [[ ! "$gav" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::Could not read coordinates from $m/pom.xml (got: '$gav')"
+              exit 1
+            fi
             IFS=: read -r g a v <<< "$gav"
             path="${g//.//}/$a/$v"
             echo "::group::$m ($gav)"
@@ -124,8 +128,9 @@ jobs:
             fi
 
             # 2) GitHub Packages
-            code=$(curl -s -o /dev/null -w '%{http_code}' \
-              -u "$GITHUB_ACTOR:$GITHUB_TOKEN" "$PACKAGES_URL/$path/$a-$v.pom")
+            code=$(curl -sg -o /dev/null -w '%{http_code}' \
+              -u "$GITHUB_ACTOR:$GITHUB_TOKEN" "$PACKAGES_URL/$path/$a-$v.pom" || true)
+            echo "GitHub Packages check for $gav: HTTP $code"
             if [[ "$v" == *-SNAPSHOT || "$code" != "200" ]]; then
               $MVN -f "$m/pom.xml" deploy -DskipTests \
                 -DaltDeploymentRepository="github::$PACKAGES_URL"
